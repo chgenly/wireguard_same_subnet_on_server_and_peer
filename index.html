@@ -1,0 +1,191 @@
+<style>
+  .title {
+    text-align: center;
+    background-color: #187de3;
+    color: white;
+    min-height: 60px;
+    border: black solid 1px;
+  }
+  .title p {
+    vertical-align: middle;
+  }
+  .indent {
+    margin-left: 5em;
+  }
+</style>
+
+<h1 class="title">
+  <p>Wireguard: when your client and server use the same subnet</p>
+</h1>
+
+<p style="text-align: center">
+  <i>
+    Chris Genly <br />
+    3/8/2024
+  </i>
+</p>
+<!-- ---------------------------------------- -->
+<a href="https://www.wireguard.com">Wireguard</a> is a simple fast and secure
+VPN. An easy way to use it is with
+<a
+  href="https://manpages.debian.org/unstable/wireguard-tools/wg-quick.8.en.html"
+  >wg-quick</a
+>. But wireguard doesn't work out of the box if your client and server both use
+the same subnet.
+<p></p>
+<p>
+  Here's my scenario. My laptop runs Ubuntu. Often, when I'm away from home it
+  is using a 10.0.0.0/24 subnet. My server is at home at also uses the subnet
+  10.0.0.0/24. The server is setup to do forwarding so I can access other
+  machines on my home network. When I use the configuration file below on my
+  laptop, any attempt to access my home machines results in trying to access the
+  local subnet. Now, if my laptop was instead using a 192.168.0.0/24 subnet,
+  things would work. But I don't assign that address, dhcp does.
+</p>
+<p>
+  Notice my laptop wg0 is configured with IP address 10.1.0.3. My home wireguard
+  interface has the address 10.1.0.1. This means the wireguard interfaces are
+  not confused with my laptop or home addresses.
+</p>
+<p></p>
+<b>wg0.conf</b>
+<pre class="indent">
+[INTERFACE]
+address=10.1.0.3/16
+PrivateKey = &lt;private>
+DNS = 10.0.0.1
+ListenPort = 51821
+
+[peer]
+endpoint = home.us:51820
+PublicKey = &lt;public>
+AllowedIPs = 0.0.0.0/0
+</pre>
+<p>
+  <b># wg-quick up wg0</b>
+</p>
+
+<pre class="indent">
+[#] ip link add wg0 type wireguard
+[#] wg setconf wg0 /dev/fd/63
+[#] ip -4 address add 10.1.0.3/16 dev wg0
+[#] ip link set mtu 1420 up dev wg0
+[#] resolvconf -a tun.wg0 -m 0 -x
+[#] wg set wg0 fwmark 51820
+[#] ip -4 route add 0.0.0.0/0 dev wg0 table 51820
+[#] ip -4 rule add not fwmark 51820 table 51820
+[#] ip -4 rule add table main suppress_prefixlength 0
+[#] sysctl -q net.ipv4.conf.all.src_valid_mark=1
+[#] nft -f /dev/fd/63
+</pre>
+
+<p>
+  Let's figure out what's going wrong. Here's the output from the ip command for
+  rules and tables.
+</p>
+
+<b># ip rule</b>
+<pre class="indent">
+0:      from all lookup local
+32764:  from all lookup main suppress_prefixlength 0
+32765:  not from all fwmark 0xca6c lookup 51820
+32766:  from all lookup main
+32767:  from all lookup default
+</pre>
+
+<b># ip route show table 51820</b>
+<pre class="indent">
+default dev wg0 scope link
+</pre>
+<b># ip route show table main</b>
+<pre class="indent">
+default via 10.0.0.1 dev wlp2s0 proto dhcp metric 600
+10.0.0.0/24 dev wlp2s0 proto kernel scope link src 10.0.0.195 metric 600
+10.1.0.0/16 dev wg0 proto kernel scope link src 10.1.0.3
+169.254.0.0/16 dev wlp2s0 scope link metric 1000
+</pre>
+<p>
+  Let's say I'm trying to reach a home machine at 10.0.0.14. When a packet is
+  sent from an application on the laptop, the rules will be checked one after
+  the other. We can ignore rule 0. It is used to check for local loopback. Then
+  comes rule
+  <i>32764: from all lookup main suppress_prefixlength 0</i>. This rule says,
+  check the main table, but ignore the default route. The odd syntax
+  <i>suppress_prefixlength 0</i> Represents the address 0.0.0.0, which is for
+  the default entry. Just like 1.2.3.4/8 means 1.0.0.0. Everything after the
+  first eight bits is set to zero. /0 is an extreme case which sets all bits to
+  zero. This gives the main table the opportunity to route packets if they do
+  not end up using the default route. If the default route would have been used,
+  since it is suppressed, we just return from the table and move on to the next
+  rule.
+</p>
+<p>
+  And this is where our problem occurs. If I'm trying to contact my home
+  10.0.0.14 address, the main table will match it on the second line:
+  <i>10.0.0.0/24 dev wlp2s0 proto kernel scope link src 10.0.0.195 metric 600</i
+  >. And send it out through my wireless interface, wlp2s0. It never made it
+  through wg0. Now, if my laptop had a 192.168.0.0/24 subnet, only the default
+  entry would have matched, and since it was suppressed, nothing would happen.
+  I'll show you how to fix this later on. Let's continue on with rule evaluation
+  as if a problem didn't occur.
+</p>
+<p>
+  The next rule <i>32765: not from all fwmark 0xca6c lookup 51820</i> is very
+  interesting. This says any packet which doesn't have the mark 0xca6c (51820)
+  should use table 51820. The 51820 table simply sends every packet through wg0.
+  This is what we want to happen, send everything through wg0. Now what is this
+  fwmark? Did you notice the following command from the output of the wg-quick
+  command?
+</p>
+<p class="indent">wg set wg0 fwmark 51820</p>
+<p>
+  This tells the wireguard interface to mark every packet it encrypts with the
+  mark 51820. This mark is not inserted into the packet that will be sent over
+  the internet. The kernel simply remembers this packet has a mark. A mark is
+  something routing rules can check. This mark lets us know if wg0 has processed
+  the packet. If it hasn't then send it through wg0. If it is marked, we just
+  move to the next rule.
+</p>
+<p>
+  And finally, if the packet isn't yet encrypted, we fall through to the next
+  rule <i>32766: from all lookup main</i>. This just applies all the normal
+  routing rules, including the default route, which existed before wg0 was brought
+  up. This is a very clever scheme. Since the main table is left intact, it's
+  easy for encrypted packets to be sent onto the network through the wireless
+  interface without wg0 getting in the way, and without endless loops of
+  attempting to encrypt an already encrypted packet.  It also means if
+  the pre wireguard routing rules were complex, they remain intact.  There
+  is no need for wg-quick to duplicate rules, or do complex analysis on 
+  the existing rules to see how they should be modified.
+</p>
+<h2>The fix</h2>
+<p>
+  Our problem was caused by the rule
+  <i>32764: from all lookup main suppress_prefixlength 0</i>. That rule caused
+  what it thought were clearly local addresses to go out the wireless lan. The
+  fix is to delete this rule. We do this by modifying wg0.conf, and adding one
+  line to be executed after the interface has been brought up.
+</p>
+<p class="indent">PostUp=ip -4 rule del table main suppress_prefixlength 0</p>
+
+<b>wg0.conf</b>
+<pre class="indent">
+[INTERFACE]
+address=10.1.0.3/16
+PrivateKey = &lt;private>
+DNS = 10.0.0.1
+ListenPort = 51821
+<span style="color: rgb(0, 128, 0)">PostUp=ip -4 rule del table main suppress_prefixlength 0</span>
+
+[peer]
+endpoint = home.us:51820
+PublicKey = &lt;public>
+AllowedIPs = 0.0.0.0/0
+</pre>
+
+<hr />
+Here's a good post on understanding linux routing and wg-quick by Roman
+Cheplyaka
+<a href="https://ro-che.info/articles/2021-02-27-linux-routing"
+  >https://ro-che.info/articles/2021-02-27-linux-routing</a
+>
