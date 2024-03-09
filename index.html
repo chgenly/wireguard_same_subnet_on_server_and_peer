@@ -47,11 +47,6 @@ the same subnet.
   the wireguard interface. So you won't be able to access any other devices,
   such as a printer, connected to your laptop local subnet.
 </p>
-<p>
-  Notice my laptop wg0 is configured with IP address 10.1.0.3. My home wireguard
-  interface has the address 10.1.0.1. This means the wireguard interfaces are
-  not confused with my laptop or home addresses.
-</p>
 <p></p>
 <b>wg0.conf</b>
 <pre class="indent">
@@ -66,6 +61,13 @@ endpoint = home.us:51820
 PublicKey = &lt;public>
 AllowedIPs = 0.0.0.0/0
 </pre>
+
+<p>
+  Notice my laptop wg0 is configured with IP address 10.1.0.3. My home wireguard
+  interface has the address 10.1.0.1. This means the wireguard interfaces are
+  not confused with my laptop or home addresses.
+</p>
+<p>Here's the output from brining up the wireguard interface, wg0.</p>
 <p>
   <b># wg-quick up wg0</b>
 </p>
