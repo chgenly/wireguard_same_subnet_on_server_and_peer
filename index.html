@@ -43,6 +43,11 @@ the same subnet.
   things would work. But I don't assign that address, dhcp does.
 </p>
 <p>
+  The solution I propose results in all traffic on the laptop being sent through
+  the wireguard interface. So you won't be able to access any other devices,
+  such as a printer, connected to your laptop local subnet.
+</p>
+<p>
   Notice my laptop wg0 is configured with IP address 10.1.0.3. My home wireguard
   interface has the address 10.1.0.1. This means the wireguard interfaces are
   not confused with my laptop or home addresses.
@@ -149,14 +154,14 @@ default via 10.0.0.1 dev wlp2s0 proto dhcp metric 600
 <p>
   And finally, if the packet isn't yet encrypted, we fall through to the next
   rule <i>32766: from all lookup main</i>. This just applies all the normal
-  routing rules, including the default route, which existed before wg0 was brought
-  up. This is a very clever scheme. Since the main table is left intact, it's
-  easy for encrypted packets to be sent onto the network through the wireless
-  interface without wg0 getting in the way, and without endless loops of
-  attempting to encrypt an already encrypted packet.  It also means if
-  the pre wireguard routing rules were complex, they remain intact.  There
-  is no need for wg-quick to duplicate rules, or do complex analysis on 
-  the existing rules to see how they should be modified.
+  routing rules, including the default route, which existed before wg0 was
+  brought up. This is a very clever scheme. Since the main table is left intact,
+  it's easy for encrypted packets to be sent onto the network through the
+  wireless interface without wg0 getting in the way, and without endless loops
+  of attempting to encrypt an already encrypted packet. It also means if the pre
+  wireguard routing rules were complex, they remain intact. There is no need for
+  wg-quick to duplicate rules, or do complex analysis on the existing rules to
+  see how they should be modified.
 </p>
 <h2>The fix</h2>
 <p>
